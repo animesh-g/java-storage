@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.50.0](https://github.com/googleapis/java-storage/compare/v2.49.0...v2.50.0) (2025-03-03)
+
+
+### Features
+
+* Next release from main branch is 2.50.0 ([#2968](https://github.com/googleapis/java-storage/issues/2968)) ([4a69fcc](https://github.com/googleapis/java-storage/commit/4a69fcc16787904675e5ba15f42bcab67553a7aa))
+
+
+### Bug Fixes
+
+* **deps:** Update the Java code generator (gapic-generator-java) to 2.54.0 ([22e7e3d](https://github.com/googleapis/java-storage/commit/22e7e3d4e8c56184f9c91b1e0bf52d5c4aa4cf9f))
+
+
+### Dependencies
+
+* Update dependency com.google.apis:google-api-services-storage to v1-rev20250224-2.0.0 ([#2969](https://github.com/googleapis/java-storage/issues/2969)) ([80a40c4](https://github.com/googleapis/java-storage/commit/80a40c41527a5fb83a41ac4754d5be22f5cd5c2b))
+
 ## [2.49.0](https://github.com/googleapis/java-storage/compare/v2.48.2...v2.49.0) (2025-02-26)
 
 
