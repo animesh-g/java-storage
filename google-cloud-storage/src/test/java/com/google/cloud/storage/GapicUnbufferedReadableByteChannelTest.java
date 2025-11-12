@@ -18,6 +18,11 @@ package com.google.cloud.storage;
 
 import static com.google.cloud.storage.TestUtils.xxd;
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.google.api.core.SettableApiFuture;
 import com.google.api.gax.rpc.ApiCallContext;
@@ -32,7 +37,20 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Test;
+import com.google.api.gax.retrying.BasicResultRetryAlgorithm;
+import com.google.api.gax.retrying.ResultRetryAlgorithm;
+import com.google.api.gax.rpc.ApiCallContext;
+import com.google.api.gax.rpc.ResponseObserver;
+import com.google.api.gax.rpc.WatchdogTimeoutException;
+import com.google.protobuf.ByteString;
+import com.google.storage.v2.ChecksummedData;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
+
+@RunWith(JUnit4.class)
 public final class GapicUnbufferedReadableByteChannelTest {
 
   @Test
@@ -73,6 +91,76 @@ public final class GapicUnbufferedReadableByteChannelTest {
       c.read(buffer);
       assertThat(xxd(buffer)).isEqualTo(xxd(testContent.getBytes()));
       assertThat(close.get()).isTrue();
+    }
+  }
+  @Test
+  public void read_simulatesPacketDrop_prematureEOF() throws Exception {
+    // 1. Setup
+    final int totalObjectSize = 100;
+    final int partSize = 10;
+    final int numParts = 10;
+
+    ZeroCopyServerStreamingCallable<ReadObjectRequest, ReadObjectResponse> read = mock(ZeroCopyServerStreamingCallable.class);
+    ResponseContentLifecycleManager<ReadObjectResponse> responseContentLifecycleManager = ResponseContentLifecycleManager.create();
+    when(read.getResponseContentLifecycleManager()).thenReturn(responseContentLifecycleManager);
+
+    ResultRetryAlgorithm<Object> resultRetryAlgorithm =
+        new BasicResultRetryAlgorithm<Object>() {
+          @Override
+          public boolean shouldRetry(Throwable previousThrowable, Object previousResponse) {
+            return previousThrowable instanceof WatchdogTimeoutException;
+          }
+        };
+
+    SettableApiFuture<com.google.storage.v2.Object> result = SettableApiFuture.create();
+    ReadObjectRequest req = ReadObjectRequest.newBuilder().setReadLimit(totalObjectSize).build();
+
+    // 2. Mocking the Stream Behavior
+    doAnswer(
+        new Answer<Void>() {
+          private int invocationCount = 0;
+
+          @Override
+          public Void answer(InvocationOnMock invocation) {
+            invocationCount++;
+            ResponseObserver<ReadObjectResponse> observer = invocation.getArgument(1);
+            if (invocationCount == 1) {
+              for (int i = 0; i < numParts - 2; i++) {
+                ReadObjectResponse response = ReadObjectResponse.newBuilder()
+                    .setChecksummedData(
+                        ChecksummedData.newBuilder()
+                            .setContent(ByteString.copyFrom(new byte[partSize]))
+                            .build())
+                    .build();
+                observer.onResponse(response);
+              }
+              observer.onError(new WatchdogTimeoutException("simulated timeout"));
+            } else {
+              observer.onComplete();
+            }
+            return null;
+          }
+        })
+        .when(read)
+        .call(any(ReadObjectRequest.class), any(ResponseObserver.class), any(ApiCallContext.class));
+
+    // 3. Execution
+    try (GapicUnbufferedReadableByteChannel channel =
+        new GapicUnbufferedReadableByteChannel(
+            result, read, req, Hasher.noop(), Retrying.never(), resultRetryAlgorithm)) {
+
+      ByteBuffer buffer = ByteBuffer.allocate(totalObjectSize);
+      int bytesRead = 0;
+      while (buffer.hasRemaining()) {
+        int readCount = channel.read(buffer);
+        if (readCount == -1) {
+          break;
+        }
+        bytesRead += readCount;
+      }
+
+      // 4. Assertion
+      assertEquals(partSize * 8, bytesRead);
     }
   }
 }
