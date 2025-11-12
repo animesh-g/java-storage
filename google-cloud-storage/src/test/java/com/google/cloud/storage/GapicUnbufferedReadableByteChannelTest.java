@@ -40,6 +40,7 @@ import com.google.storage.v2.ReadObjectResponse;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -56,55 +57,55 @@ public final class GapicUnbufferedReadableByteChannelTest {
     }
   }
 
-  // @Test
-  // public void ensureResponseAreClosed() throws IOException {
-  //   ChecksummedTestContent testContent =
-  //       ChecksummedTestContent.of(DataGenerator.base64Characters().genBytes(10));
-  //
-  //   AtomicBoolean close = new AtomicBoolean(false);
-  //
-  //   ResponseContentLifecycleManager<ReadObjectResponse> manager =
-  //       resp -> ResponseContentLifecycleHandle.create(resp, () -> close.compareAndSet(false, true));
-  //
-  //   try (GapicUnbufferedReadableByteChannel c =
-  //       new GapicUnbufferedReadableByteChannel(
-  //           SettableApiFuture.create(),
-  //           new ZeroCopyServerStreamingCallable<>(
-  //               new ServerStreamingCallable<ReadObjectRequest, ReadObjectResponse>() {
-  //                 @Override
-  //                 public void call(
-  //                     ReadObjectRequest request,
-  //                     ResponseObserver<ReadObjectResponse> respond,
-  //                     ApiCallContext context) {
-  //                   respond.onStart(new StreamController() {
-  //                     @Override
-  //                     public void cancel() {}
-  //
-  //                     @Override
-  //                     public void request(int count) {}
-  //
-  //                     @Override
-  //                     public void disableAutoInboundFlowControl() {}
-  //                   });
-  //                   respond.onResponse(
-  //                       ReadObjectResponse.newBuilder()
-  //                           .setChecksummedData(testContent.asChecksummedData())
-  //                           .build());
-  //                   respond.onComplete();
-  //                 }
-  //               },
-  //               manager),
-  //           ReadObjectRequest.getDefaultInstance(),
-  //           Hasher.noop(),
-  //           Retrier.attemptOnce(),
-  //           Retrying.neverRetry())) {
-  //
-  //     ByteBuffer buffer = ByteBuffer.allocate(15);
-  //     c.read(buffer);
-  //     assertThat(xxd(buffer)).isEqualTo(xxd(testContent.getBytes()));
-  //     assertThat(close.get()).isTrue();
-  //   }
-  // }
+  @Test
+  public void ensureResponseAreClosed() throws IOException {
+    ChecksummedTestContent testContent =
+        ChecksummedTestContent.of(DataGenerator.base64Characters().genBytes(10));
+
+    AtomicBoolean close = new AtomicBoolean(false);
+
+    ResponseContentLifecycleManager<ReadObjectResponse> manager =
+        resp -> ResponseContentLifecycleHandle.create(resp, () -> close.compareAndSet(false, true));
+
+    try (GapicUnbufferedReadableByteChannel c =
+        new GapicUnbufferedReadableByteChannel(
+            SettableApiFuture.create(),
+            new ZeroCopyServerStreamingCallable<>(
+                new ServerStreamingCallable<ReadObjectRequest, ReadObjectResponse>() {
+                  @Override
+                  public void call(
+                      ReadObjectRequest request,
+                      ResponseObserver<ReadObjectResponse> respond,
+                      ApiCallContext context) {
+                    respond.onStart(new StreamController() {
+                      @Override
+                      public void cancel() {}
+
+                      @Override
+                      public void request(int count) {}
+
+                      @Override
+                      public void disableAutoInboundFlowControl() {}
+                    });
+                    respond.onResponse(
+                        ReadObjectResponse.newBuilder()
+                            .setChecksummedData(testContent.asChecksummedData())
+                            .build());
+                    respond.onComplete();
+                  }
+                },
+                manager),
+            ReadObjectRequest.getDefaultInstance(),
+            Hasher.noop(),
+            Retrier.attemptOnce(),
+            Retrying.neverRetry())) {
+
+      ByteBuffer buffer = ByteBuffer.allocate(15);
+      c.read(buffer);
+      assertThat(xxd(buffer)).isEqualTo(xxd(testContent.getBytes()));
+      assertThat(close.get()).isTrue();
+    }
+  }
 
   @Test
   public void read_simulatesPacketDrop_prematureEOF() throws Exception {
@@ -112,6 +113,7 @@ public final class GapicUnbufferedReadableByteChannelTest {
     final int totalObjectSize = 100;
     final int partSize = 10;
     final int numParts = 10;
+    final AtomicInteger invocationCount = new AtomicInteger(0);
 
     ServerStreamingCallable<ReadObjectRequest, ReadObjectResponse> mockCallable = mock(ServerStreamingCallable.class);
 
@@ -131,11 +133,8 @@ public final class GapicUnbufferedReadableByteChannelTest {
     // 2. Mocking the Stream Behavior
     doAnswer(
         new Answer<Void>() {
-          private int invocationCount = 0;
-
           @Override
           public Void answer(InvocationOnMock invocation) {
-            invocationCount++;
             ResponseObserver<ReadObjectResponse> observer = invocation.getArgument(1);
             observer.onStart(new StreamController() {
               @Override
@@ -148,7 +147,7 @@ public final class GapicUnbufferedReadableByteChannelTest {
               public void disableAutoInboundFlowControl() {}
             });
 
-            if (invocationCount == 1) {
+            if (invocationCount.incrementAndGet() == 1) {
               for (int i = 0; i < numParts - 2; i++) {
                 ReadObjectResponse response = ReadObjectResponse.newBuilder()
                     .setChecksummedData(
@@ -182,7 +181,6 @@ public final class GapicUnbufferedReadableByteChannelTest {
       int bytesRead = 0;
       while (buffer.hasRemaining()) {
         int readCount = channel.read(buffer);
-        System.out.println("Reading from channel...");
         if (readCount == -1) {
           break;
         }
