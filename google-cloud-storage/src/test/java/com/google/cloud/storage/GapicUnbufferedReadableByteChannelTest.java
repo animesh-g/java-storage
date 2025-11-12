@@ -22,33 +22,30 @@ import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.google.api.core.SettableApiFuture;
+import com.google.api.gax.retrying.BasicResultRetryAlgorithm;
+import com.google.api.gax.retrying.ResultRetryAlgorithm;
 import com.google.api.gax.rpc.ApiCallContext;
 import com.google.api.gax.rpc.ResponseObserver;
 import com.google.api.gax.rpc.ServerStreamingCallable;
+import com.google.api.gax.rpc.StreamController;
+import com.google.api.gax.rpc.WatchdogTimeoutException;
 import com.google.cloud.storage.GrpcUtils.ZeroCopyServerStreamingCallable;
 import com.google.cloud.storage.Retrying.Retrier;
 import com.google.cloud.storage.it.ChecksummedTestContent;
+import com.google.protobuf.ByteString;
+import com.google.storage.v2.ChecksummedData;
 import com.google.storage.v2.ReadObjectRequest;
 import com.google.storage.v2.ReadObjectResponse;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Test;
-import com.google.api.gax.retrying.BasicResultRetryAlgorithm;
-import com.google.api.gax.retrying.ResultRetryAlgorithm;
-import com.google.api.gax.rpc.ApiCallContext;
-import com.google.api.gax.rpc.ResponseObserver;
-import com.google.api.gax.rpc.WatchdogTimeoutException;
-import com.google.protobuf.ByteString;
-import com.google.storage.v2.ChecksummedData;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
-
 
 @RunWith(JUnit4.class)
 public final class GapicUnbufferedReadableByteChannelTest {
@@ -93,6 +90,7 @@ public final class GapicUnbufferedReadableByteChannelTest {
       assertThat(close.get()).isTrue();
     }
   }
+
   @Test
   public void read_simulatesPacketDrop_prematureEOF() throws Exception {
     // 1. Setup
@@ -100,9 +98,9 @@ public final class GapicUnbufferedReadableByteChannelTest {
     final int partSize = 10;
     final int numParts = 10;
 
-    ZeroCopyServerStreamingCallable<ReadObjectRequest, ReadObjectResponse> read = mock(ZeroCopyServerStreamingCallable.class);
-    ResponseContentLifecycleManager<ReadObjectResponse> responseContentLifecycleManager = ResponseContentLifecycleManager.create();
-    when(read.getResponseContentLifecycleManager()).thenReturn(responseContentLifecycleManager);
+    ServerStreamingCallable<ReadObjectRequest, ReadObjectResponse> mockCallable = mock(ServerStreamingCallable.class);
+
+    ResponseContentLifecycleManager<ReadObjectResponse> manager = resp -> ResponseContentLifecycleHandle.create(resp, () -> {});
 
     ResultRetryAlgorithm<Object> resultRetryAlgorithm =
         new BasicResultRetryAlgorithm<Object>() {
@@ -124,6 +122,14 @@ public final class GapicUnbufferedReadableByteChannelTest {
           public Void answer(InvocationOnMock invocation) {
             invocationCount++;
             ResponseObserver<ReadObjectResponse> observer = invocation.getArgument(1);
+            observer.onStart(new StreamController() {
+              @Override
+              public void cancel() {}
+
+              @Override
+              public void request(int count) {}
+            });
+
             if (invocationCount == 1) {
               for (int i = 0; i < numParts - 2; i++) {
                 ReadObjectResponse response = ReadObjectResponse.newBuilder()
@@ -134,20 +140,25 @@ public final class GapicUnbufferedReadableByteChannelTest {
                     .build();
                 observer.onResponse(response);
               }
-              observer.onError(new WatchdogTimeoutException("simulated timeout"));
+              observer.onError(new WatchdogTimeoutException("simulated timeout", true));
             } else {
               observer.onComplete();
             }
             return null;
           }
         })
-        .when(read)
+        .when(mockCallable)
         .call(any(ReadObjectRequest.class), any(ResponseObserver.class), any(ApiCallContext.class));
 
     // 3. Execution
     try (GapicUnbufferedReadableByteChannel channel =
         new GapicUnbufferedReadableByteChannel(
-            result, read, req, Hasher.noop(), Retrying.never(), resultRetryAlgorithm)) {
+            result,
+            new ZeroCopyServerStreamingCallable<>(mockCallable, manager),
+            req,
+            Hasher.noop(),
+            Retrier.attemptOnce(),
+            resultRetryAlgorithm)) {
 
       ByteBuffer buffer = ByteBuffer.allocate(totalObjectSize);
       int bytesRead = 0;
