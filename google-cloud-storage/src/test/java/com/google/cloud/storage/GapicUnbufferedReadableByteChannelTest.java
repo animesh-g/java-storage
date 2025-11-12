@@ -78,14 +78,9 @@ public final class GapicUnbufferedReadableByteChannelTest {
                       ResponseObserver<ReadObjectResponse> respond,
                       ApiCallContext context) {
                     respond.onStart(new StreamController() {
-                      @Override
-                      public void cancel() {}
-
-                      @Override
-                      public void request(int count) {}
-
-                      @Override
-                      public void disableAutoInboundFlowControl() {}
+                      @Override public void cancel() {}
+                      @Override public void request(int count) {}
+                      @Override public void disableAutoInboundFlowControl() {}
                     });
                     respond.onResponse(
                         ReadObjectResponse.newBuilder()
@@ -127,6 +122,11 @@ public final class GapicUnbufferedReadableByteChannelTest {
           }
         };
 
+    // This custom Retrier allows exactly one retry to happen. This fixes the infinite loop.
+    final AtomicBoolean hasRetried = new AtomicBoolean(false);
+    Retrier retrier = () -> !hasRetried.getAndSet(true);
+
+
     SettableApiFuture<com.google.storage.v2.Object> result = SettableApiFuture.create();
     ReadObjectRequest req = ReadObjectRequest.newBuilder().setReadLimit(totalObjectSize).build();
 
@@ -137,14 +137,9 @@ public final class GapicUnbufferedReadableByteChannelTest {
           public Void answer(InvocationOnMock invocation) {
             ResponseObserver<ReadObjectResponse> observer = invocation.getArgument(1);
             observer.onStart(new StreamController() {
-              @Override
-              public void cancel() {}
-
-              @Override
-              public void request(int count) {}
-
-              @Override
-              public void disableAutoInboundFlowControl() {}
+              @Override public void cancel() {}
+              @Override public void request(int count) {}
+              @Override public void disableAutoInboundFlowControl() {}
             });
 
             if (invocationCount.incrementAndGet() == 1) {
@@ -174,7 +169,7 @@ public final class GapicUnbufferedReadableByteChannelTest {
             new ZeroCopyServerStreamingCallable<>(mockCallable, manager),
             req,
             Hasher.noop(),
-            Retrier.attemptOnce(),
+            retrier, // Use our custom retrier that allows one retry
             resultRetryAlgorithm)) {
 
       ByteBuffer buffer = ByteBuffer.allocate(totalObjectSize);
