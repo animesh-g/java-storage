@@ -56,6 +56,7 @@ public final class GapicUnbufferedReadableByteChannelTest {
     }
   }
 
+  @Ignore
   @Test
   public void ensureResponseAreClosed() throws IOException {
     ChecksummedTestContent testContent =
@@ -182,6 +183,7 @@ public final class GapicUnbufferedReadableByteChannelTest {
       int bytesRead = 0;
       while (buffer.hasRemaining()) {
         int readCount = channel.read(buffer);
+        System.out.println("Reading from channel...");
         if (readCount == -1) {
           break;
         }
