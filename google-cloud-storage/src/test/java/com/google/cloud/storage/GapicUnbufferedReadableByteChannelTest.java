@@ -56,56 +56,55 @@ public final class GapicUnbufferedReadableByteChannelTest {
     }
   }
 
-  @Ignore
-  @Test
-  public void ensureResponseAreClosed() throws IOException {
-    ChecksummedTestContent testContent =
-        ChecksummedTestContent.of(DataGenerator.base64Characters().genBytes(10));
-
-    AtomicBoolean close = new AtomicBoolean(false);
-
-    ResponseContentLifecycleManager<ReadObjectResponse> manager =
-        resp -> ResponseContentLifecycleHandle.create(resp, () -> close.compareAndSet(false, true));
-
-    try (GapicUnbufferedReadableByteChannel c =
-        new GapicUnbufferedReadableByteChannel(
-            SettableApiFuture.create(),
-            new ZeroCopyServerStreamingCallable<>(
-                new ServerStreamingCallable<ReadObjectRequest, ReadObjectResponse>() {
-                  @Override
-                  public void call(
-                      ReadObjectRequest request,
-                      ResponseObserver<ReadObjectResponse> respond,
-                      ApiCallContext context) {
-                    respond.onStart(new StreamController() {
-                      @Override
-                      public void cancel() {}
-
-                      @Override
-                      public void request(int count) {}
-
-                      @Override
-                      public void disableAutoInboundFlowControl() {}
-                    });
-                    respond.onResponse(
-                        ReadObjectResponse.newBuilder()
-                            .setChecksummedData(testContent.asChecksummedData())
-                            .build());
-                    respond.onComplete();
-                  }
-                },
-                manager),
-            ReadObjectRequest.getDefaultInstance(),
-            Hasher.noop(),
-            Retrier.attemptOnce(),
-            Retrying.neverRetry())) {
-
-      ByteBuffer buffer = ByteBuffer.allocate(15);
-      c.read(buffer);
-      assertThat(xxd(buffer)).isEqualTo(xxd(testContent.getBytes()));
-      assertThat(close.get()).isTrue();
-    }
-  }
+  // @Test
+  // public void ensureResponseAreClosed() throws IOException {
+  //   ChecksummedTestContent testContent =
+  //       ChecksummedTestContent.of(DataGenerator.base64Characters().genBytes(10));
+  //
+  //   AtomicBoolean close = new AtomicBoolean(false);
+  //
+  //   ResponseContentLifecycleManager<ReadObjectResponse> manager =
+  //       resp -> ResponseContentLifecycleHandle.create(resp, () -> close.compareAndSet(false, true));
+  //
+  //   try (GapicUnbufferedReadableByteChannel c =
+  //       new GapicUnbufferedReadableByteChannel(
+  //           SettableApiFuture.create(),
+  //           new ZeroCopyServerStreamingCallable<>(
+  //               new ServerStreamingCallable<ReadObjectRequest, ReadObjectResponse>() {
+  //                 @Override
+  //                 public void call(
+  //                     ReadObjectRequest request,
+  //                     ResponseObserver<ReadObjectResponse> respond,
+  //                     ApiCallContext context) {
+  //                   respond.onStart(new StreamController() {
+  //                     @Override
+  //                     public void cancel() {}
+  //
+  //                     @Override
+  //                     public void request(int count) {}
+  //
+  //                     @Override
+  //                     public void disableAutoInboundFlowControl() {}
+  //                   });
+  //                   respond.onResponse(
+  //                       ReadObjectResponse.newBuilder()
+  //                           .setChecksummedData(testContent.asChecksummedData())
+  //                           .build());
+  //                   respond.onComplete();
+  //                 }
+  //               },
+  //               manager),
+  //           ReadObjectRequest.getDefaultInstance(),
+  //           Hasher.noop(),
+  //           Retrier.attemptOnce(),
+  //           Retrying.neverRetry())) {
+  //
+  //     ByteBuffer buffer = ByteBuffer.allocate(15);
+  //     c.read(buffer);
+  //     assertThat(xxd(buffer)).isEqualTo(xxd(testContent.getBytes()));
+  //     assertThat(close.get()).isTrue();
+  //   }
+  // }
 
   @Test
   public void read_simulatesPacketDrop_prematureEOF() throws Exception {
