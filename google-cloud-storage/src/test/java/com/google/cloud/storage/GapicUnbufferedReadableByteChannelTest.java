@@ -30,7 +30,6 @@ import com.google.api.gax.rpc.ApiCallContext;
 import com.google.api.gax.rpc.ResponseObserver;
 import com.google.api.gax.rpc.ServerStreamingCallable;
 import com.google.api.gax.rpc.StreamController;
-import com.google.api.gax.rpc.WatchdogTimeoutException;
 import com.google.cloud.storage.GrpcUtils.ZeroCopyServerStreamingCallable;
 import com.google.cloud.storage.Retrying.Retrier;
 import com.google.cloud.storage.it.ChecksummedTestContent;
@@ -49,6 +48,13 @@ import org.mockito.stubbing.Answer;
 
 @RunWith(JUnit4.class)
 public final class GapicUnbufferedReadableByteChannelTest {
+
+  // A custom, public exception for our test to avoid access issues
+  public static class SimulatedTimeoutException extends IOException {
+    public SimulatedTimeoutException(String message) {
+      super(message);
+    }
+  }
 
   @Test
   public void ensureResponseAreClosed() throws IOException {
@@ -70,7 +76,16 @@ public final class GapicUnbufferedReadableByteChannelTest {
                       ReadObjectRequest request,
                       ResponseObserver<ReadObjectResponse> respond,
                       ApiCallContext context) {
-                    respond.onStart(TestUtils.nullStreamController());
+                    respond.onStart(new StreamController() {
+                      @Override
+                      public void cancel() {}
+
+                      @Override
+                      public void request(int count) {}
+
+                      @Override
+                      public void disableAutoInboundFlowControl() {}
+                    });
                     respond.onResponse(
                         ReadObjectResponse.newBuilder()
                             .setChecksummedData(testContent.asChecksummedData())
@@ -106,7 +121,7 @@ public final class GapicUnbufferedReadableByteChannelTest {
         new BasicResultRetryAlgorithm<Object>() {
           @Override
           public boolean shouldRetry(Throwable previousThrowable, Object previousResponse) {
-            return previousThrowable instanceof WatchdogTimeoutException;
+            return previousThrowable instanceof SimulatedTimeoutException;
           }
         };
 
@@ -128,6 +143,9 @@ public final class GapicUnbufferedReadableByteChannelTest {
 
               @Override
               public void request(int count) {}
+
+              @Override
+              public void disableAutoInboundFlowControl() {}
             });
 
             if (invocationCount == 1) {
@@ -140,7 +158,7 @@ public final class GapicUnbufferedReadableByteChannelTest {
                     .build();
                 observer.onResponse(response);
               }
-              observer.onError(new WatchdogTimeoutException("simulated timeout", true));
+              observer.onError(new SimulatedTimeoutException("simulated timeout"));
             } else {
               observer.onComplete();
             }
