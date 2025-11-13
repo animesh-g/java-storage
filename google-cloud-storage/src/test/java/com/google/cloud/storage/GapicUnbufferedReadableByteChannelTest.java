@@ -130,8 +130,7 @@ public final class GapicUnbufferedReadableByteChannelTest {
           public <Response, Model> Model run(
               ResultRetryAlgorithm<?> resultRetryAlgorithm,
               java.util.concurrent.Callable<Response> callable,
-              com.google.cloud.storage.Conversions.Decoder<Response, Model> decoder)
-              throws Exception {
+              com.google.cloud.storage.Conversions.Decoder<Response, Model> decoder) {
             while (true) {
               try {
                 Response response = callable.call();
@@ -141,7 +140,8 @@ public final class GapicUnbufferedReadableByteChannelTest {
                   // retry once
                   continue;
                 } else {
-                  throw e;
+                  // Wrap the checked exception in an unchecked RuntimeException
+                  throw new RuntimeException(e);
                 }
               }
             }
