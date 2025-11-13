@@ -20,8 +20,20 @@ import java.util.Iterator;
 import org.junit.Test;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+import com.google.storage.v2.ChecksummedData;
 
 public class GapicUnbufferedReadableByteChannelTest {
+
+  // Helper to create a response chunk
+  private ReadObjectResponse createResponse(byte[] content, int offset, int length) {
+    return ReadObjectResponse.newBuilder()
+        // Content is often wrapped in ChecksummedData, which uses ByteString
+        .setChecksummedData(
+            com.google.storage.v2.ChecksummedData.newBuilder() // Use full name or import ChecksummedData
+                .setContent(ByteString.copyFrom(content, offset, length))
+                .build())
+        .build();
+  }
 
   @Test
   public void testPacketLossSimulation_RecoverOn9thRead() throws IOException {
@@ -40,15 +52,7 @@ public class GapicUnbufferedReadableByteChannelTest {
     Iterator<ReadObjectResponse> stream1 = mock(Iterator.class);
     Iterator<ReadObjectResponse> stream2 = mock(Iterator.class);
 
-    // Helper to create a response chunk
-    ReadObjectResponse createResponse(int offset, int length) {
-      return ReadObjectResponse.newBuilder()
-          .setChecksummedData(
-              ChecksummedData.newBuilder()
-                  .setContent(ByteString.copyFrom(fullFileContent, offset, length))
-                  .build())
-          .build();
-    }
+
 
     // Define Stream 1 behavior: 8 successful 1KB chunks, then throw
     when(stream1.hasNext()).thenReturn(true, true, true, true, true, true, true, true, true);
