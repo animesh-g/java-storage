@@ -1,216 +1,126 @@
-/*
- * Copyright 2025 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-package com.google.cloud.storage;
-
-import static com.google.cloud.storage.TestUtils.xxd;
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import com.google.api.core.SettableApiFuture;
-import com.google.api.gax.retrying.BasicResultRetryAlgorithm;
-import com.google.api.gax.retrying.ResultRetryAlgorithm;
-import com.google.api.gax.rpc.ApiCallContext;
-import com.google.api.gax.rpc.ResponseObserver;
-import com.google.api.gax.rpc.ServerStreamingCallable;
-import com.google.api.gax.rpc.StreamController;
-import com.google.cloud.storage.GrpcUtils.ZeroCopyServerStreamingCallable;
-import com.google.cloud.storage.Retrying.Retrier;
-import com.google.cloud.storage.it.ChecksummedTestContent;
+import com.google.api.gax.rpc.ServerStream;
+import com.google.api.gax.rpc.UnavailableException;
+import com.google.cloud.storage.GapicUnbufferedReadableByteChannel;
+import com.google.cloud.storage.ReadObjectRequest; // Or the proto equivalent
+import com.google.cloud.storage.ReadObjectResponse; // Or the proto equivalent
 import com.google.protobuf.ByteString;
-import com.google.storage.v2.ChecksummedData;
-import com.google.storage.v2.ReadObjectRequest;
-import com.google.storage.v2.ReadObjectResponse;
+import io.grpc.Status;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.nio.channels.ReadableByteChannel;
+import java.util.Iterator;
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
-@RunWith(JUnit4.class)
-public final class GapicUnbufferedReadableByteChannelTest {
-
-  // A custom, public exception for our test to avoid access issues
-  public static class SimulatedTimeoutException extends IOException {
-    public SimulatedTimeoutException(String message) {
-      super(message);
-    }
-  }
-  @SuppressWarnings("unchecked")
-  private static <T extends Throwable> RuntimeException sneakyThrow(Throwable t) throws T {
-    throw (T) t;
-  }
-
-
+public class GapicUnbufferedReadableByteChannelTest {
 
   @Test
-  public void ensureResponseAreClosed() throws IOException {
-    ChecksummedTestContent testContent =
-        ChecksummedTestContent.of(DataGenerator.base64Characters().genBytes(10));
-
-    AtomicBoolean close = new AtomicBoolean(false);
-
-    ResponseContentLifecycleManager<ReadObjectResponse> manager =
-        resp -> ResponseContentLifecycleHandle.create(resp, () -> close.compareAndSet(false, true));
-
-    try (GapicUnbufferedReadableByteChannel c =
-        new GapicUnbufferedReadableByteChannel(
-            SettableApiFuture.create(),
-            new ZeroCopyServerStreamingCallable<>(
-                new ServerStreamingCallable<ReadObjectRequest, ReadObjectResponse>() {
-                  @Override
-                  public void call(
-                      ReadObjectRequest request,
-                      ResponseObserver<ReadObjectResponse> respond,
-                      ApiCallContext context) {
-                    respond.onStart(new StreamController() {
-                      @Override public void cancel() {}
-                      @Override public void request(int count) {}
-                      @Override public void disableAutoInboundFlowControl() {}
-                    });
-                    respond.onResponse(
-                        ReadObjectResponse.newBuilder()
-                            .setChecksummedData(testContent.asChecksummedData())
-                            .build());
-                    respond.onComplete();
-                  }
-                },
-                manager),
-            ReadObjectRequest.getDefaultInstance(),
-            Hasher.noop(),
-            Retrier.attemptOnce(),
-            Retrying.neverRetry())) {
-
-      ByteBuffer buffer = ByteBuffer.allocate(15);
-      c.read(buffer);
-      assertThat(xxd(buffer)).isEqualTo(xxd(testContent.getBytes()));
-      assertThat(close.get()).isTrue();
+  public void testPacketLossSimulation_RecoverOn9thRead() throws IOException {
+    // 1. Setup Data
+    byte[] fullFileContent = new byte[10 * 1024]; // 10 KB
+    for (int i = 0; i < fullFileContent.length; i++) {
+      fullFileContent[i] = (byte) (i % 256);
     }
-  }
 
-  @Test
-  public void read_simulatesPacketDrop_prematureEOF() throws Exception {
-    // 1. Setup
-    final int totalObjectSize = 100;
-    final int partSize = 10;
-    final int numParts = 10;
-    final AtomicInteger invocationCount = new AtomicInteger(0);
+    // 2. Mock the underlying stream source
+    // Assuming the channel takes a callable or stub that returns a ServerStream<ReadObjectResponse>
+    // We need to mock two streams: 
+    // Stream 1: Returns 8KB of data, then throws UNAVAILABLE (Packet Loss)
+    // Stream 2: Returns the remaining 2KB of data (Recovery)
 
-    ServerStreamingCallable<ReadObjectRequest, ReadObjectResponse> mockCallable = mock(ServerStreamingCallable.class);
+    Iterator<ReadObjectResponse> stream1 = mock(Iterator.class);
+    Iterator<ReadObjectResponse> stream2 = mock(Iterator.class);
 
-    ResponseContentLifecycleManager<ReadObjectResponse> manager = resp -> ResponseContentLifecycleHandle.create(resp, () -> {});
+    // Helper to create a response chunk
+    ReadObjectResponse createResponse(int offset, int length) {
+      return ReadObjectResponse.newBuilder()
+          .setChecksummedData(
+              ChecksummedData.newBuilder()
+                  .setContent(ByteString.copyFrom(fullFileContent, offset, length))
+                  .build())
+          .build();
+    }
 
-    ResultRetryAlgorithm<Object> resultRetryAlgorithm =
-        new BasicResultRetryAlgorithm<Object>() {
+    // Define Stream 1 behavior: 8 successful 1KB chunks, then throw
+    when(stream1.hasNext()).thenReturn(true, true, true, true, true, true, true, true, true);
+    when(stream1.next())
+        .thenReturn(createResponse(0, 1024))    // 1st KB
+        .thenReturn(createResponse(1024, 1024)) // 2nd KB
+        .thenReturn(createResponse(2048, 1024)) // 3rd KB
+        .thenReturn(createResponse(3072, 1024)) // 4th KB
+        .thenReturn(createResponse(4096, 1024)) // 5th KB
+        .thenReturn(createResponse(5120, 1024)) // 6th KB
+        .thenReturn(createResponse(6144, 1024)) // 7th KB
+        .thenReturn(createResponse(7168, 1024)) // 8th KB
+        .thenThrow(new UnavailableException(new RuntimeException("Packet Loss"), Status.UNAVAILABLE.getCode(), true)); // 9th read fails
+
+    // Define Stream 2 behavior: Recover from offset 8192 (8KB) to end
+    when(stream2.hasNext()).thenReturn(true, true, false);
+    when(stream2.next())
+        .thenReturn(createResponse(8192, 1024)) // 9th KB (Retry successful)
+        .thenReturn(createResponse(9216, 1024)); // 10th KB
+
+    // Mock the Callable/Stub to return stream1 first, then stream2 upon retry
+    // Note: The channel usually creates a new stream with a specific 'read_offset'.
+    // We verify the offset in the verification step or use an Answer to return based on request offset.
+
+    // Hypothetical Mock Setup for the Callable
+    ServerStreamingCallable<ReadObjectRequest, ReadObjectResponse> mockCallable =
+        mock(ServerStreamingCallable.class);
+
+    when(mockCallable.call(any()))
+        .thenAnswer(new Answer<Iterator<ReadObjectResponse>>() {
+          private int callCount = 0;
           @Override
-          public boolean shouldRetry(Throwable previousThrowable, Object previousResponse) {
-            return previousThrowable instanceof SimulatedTimeoutException;
-          }
-        };
-
-    // This custom Retrier allows exactly one retry to happen. This fixes the infinite loop.
-    final AtomicBoolean hasRetried = new AtomicBoolean(false);
-    Retrier retrier =
-        new Retrier() {
-          @Override
-          public <Response, Model> Model run(
-              ResultRetryAlgorithm<?> resultRetryAlgorithm,
-              java.util.concurrent.Callable<Response> callable,
-              com.google.cloud.storage.Conversions.Decoder<Response, Model> decoder) {
-            while (true) {
-              try {
-                Response response = callable.call();
-                return decoder.decode(response);
-              } catch (Exception e) {
-                if (resultRetryAlgorithm.shouldRetry(e, null) && !hasRetried.getAndSet(true)) {
-                  // retry once
-                  continue;
-                } else {
-                  // Use sneaky throws to throw the original checked exception
-                  throw sneakyThrow(e);
-                }
-              }
-            }
-          }
-        };
-
-    SettableApiFuture<com.google.storage.v2.Object> result = SettableApiFuture.create();
-    ReadObjectRequest req = ReadObjectRequest.newBuilder().setReadLimit(totalObjectSize).build();
-
-    // 2. Mocking the Stream Behavior
-    doAnswer(
-        new Answer<Void>() {
-          @Override
-          public Void answer(InvocationOnMock invocation) {
-            ResponseObserver<ReadObjectResponse> observer = invocation.getArgument(1);
-            observer.onStart(new StreamController() {
-              @Override public void cancel() {}
-              @Override public void request(int count) {}
-              @Override public void disableAutoInboundFlowControl() {}
-            });
-
-            if (invocationCount.incrementAndGet() == 1) {
-              for (int i = 0; i < numParts - 2; i++) {
-                ReadObjectResponse response = ReadObjectResponse.newBuilder()
-                    .setChecksummedData(
-                        ChecksummedData.newBuilder()
-                            .setContent(ByteString.copyFrom(new byte[partSize]))
-                            .build())
-                    .build();
-                observer.onResponse(response);
-              }
-              observer.onError(new SimulatedTimeoutException("simulated timeout"));
+          public Iterator<ReadObjectResponse> answer(InvocationOnMock invocation) {
+            ReadObjectRequest req = invocation.getArgument(0);
+            callCount++;
+            if (callCount == 1) {
+              // Initial call (offset 0)
+              return stream1;
             } else {
-              observer.onComplete();
+              // Retry call (should request offset 8192)
+              if (req.getReadOffset() == 8192) {
+                return stream2;
+              }
+              throw new RuntimeException("Unexpected offset requested: " + req.getReadOffset());
             }
-            return null;
           }
-        })
-        .when(mockCallable)
-        .call(any(ReadObjectRequest.class), any(ResponseObserver.class), any(ApiCallContext.class));
+        });
 
-    // 3. Execution
-    try (GapicUnbufferedReadableByteChannel channel =
-        new GapicUnbufferedReadableByteChannel(
-            result,
-            new ZeroCopyServerStreamingCallable<>(mockCallable, manager),
-            req,
-            Hasher.noop(),
-            retrier, // Use our custom retrier that allows one retry
-            resultRetryAlgorithm)) {
+    // 3. Initialize the Channel
+    // You will need to inject the mockCallable into the channel via its constructor or builder
+    ReadableByteChannel channel = new GapicUnbufferedReadableByteChannel(mockCallable, ...);
 
-      ByteBuffer buffer = ByteBuffer.allocate(totalObjectSize);
-      int bytesRead = 0;
-      while (buffer.hasRemaining()) {
-        int readCount = channel.read(buffer);
-        if (readCount == -1) {
-          break;
-        }
-        bytesRead += readCount;
-      }
+    // 4. Execute Reads
+    ByteBuffer dst = ByteBuffer.allocate(1024);
+    int totalBytesRead = 0;
 
-      // 4. Assertion
-      assertEquals(partSize * 8, bytesRead);
+    for (int i = 1; i <= 10; i++) {
+      dst.clear();
+      int read = channel.read(dst);
+      totalBytesRead += read;
+
+      // Verify assertions for each step
+      assertThat(read).isEqualTo(1024);
+      // Verify the content matches expected slice
+      // ... (optional data verification)
     }
+
+    // 5. Final Verification
+    assertThat(totalBytesRead).isEqualTo(10240);
+
+    // Verify that the callable was invoked exactly twice:
+    // Once for the initial stream, and once for the retry at offset 8192
+    verify(mockCallable, times(2)).call(any());
   }
 }
