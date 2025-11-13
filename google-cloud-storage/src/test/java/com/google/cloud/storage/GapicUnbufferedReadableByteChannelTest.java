@@ -56,6 +56,11 @@ public final class GapicUnbufferedReadableByteChannelTest {
       super(message);
     }
   }
+  @SuppressWarnings("unchecked")
+  private static <T extends Throwable> T sneakyThrow(Throwable t) throws T {
+    throw (T) t;
+  }
+
 
   @Test
   public void ensureResponseAreClosed() throws IOException {
@@ -140,8 +145,8 @@ public final class GapicUnbufferedReadableByteChannelTest {
                   // retry once
                   continue;
                 } else {
-                  // Wrap the checked exception in an unchecked RuntimeException
-                  throw new RuntimeException(e);
+                  // Use sneaky throws to throw the original checked exception
+                  throw sneakyThrow(e);
                 }
               }
             }
