@@ -124,11 +124,10 @@ public final class GapicUnbufferedReadableByteChannelTest {
 
     // This custom Retrier allows exactly one retry to happen. This fixes the infinite loop.
     final AtomicBoolean hasRetried = new AtomicBoolean(false);
-    final AtomicBoolean hasRetried = new AtomicBoolean(false);
     Retrier retrier =
         new Retrier() {
           @Override
-          public <Response, Model> Model execute(
+          public <Response, Model> Model run(
               ResultRetryAlgorithm<?> resultRetryAlgorithm,
               java.util.concurrent.Callable<Response> callable,
               com.google.cloud.storage.Conversions.Decoder<Response, Model> decoder)
