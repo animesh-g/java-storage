@@ -124,8 +124,30 @@ public final class GapicUnbufferedReadableByteChannelTest {
 
     // This custom Retrier allows exactly one retry to happen. This fixes the infinite loop.
     final AtomicBoolean hasRetried = new AtomicBoolean(false);
-    Retrier retrier = () -> !hasRetried.getAndSet(true);
-
+    final AtomicBoolean hasRetried = new AtomicBoolean(false);
+    Retrier retrier =
+        new Retrier() {
+          @Override
+          public <Response, Model> Model execute(
+              ResultRetryAlgorithm<?> resultRetryAlgorithm,
+              java.util.concurrent.Callable<Response> callable,
+              com.google.cloud.storage.Conversions.Decoder<Response, Model> decoder)
+              throws Exception {
+            while (true) {
+              try {
+                Response response = callable.call();
+                return decoder.decode(response);
+              } catch (Exception e) {
+                if (resultRetryAlgorithm.shouldRetry(e, null) && !hasRetried.getAndSet(true)) {
+                  // retry once
+                  continue;
+                } else {
+                  throw e;
+                }
+              }
+            }
+          }
+        };
 
     SettableApiFuture<com.google.storage.v2.Object> result = SettableApiFuture.create();
     ReadObjectRequest req = ReadObjectRequest.newBuilder().setReadLimit(totalObjectSize).build();
