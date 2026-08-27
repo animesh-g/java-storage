@@ -299,6 +299,14 @@ public final class GrpcStorageOptions extends StorageOptions
               internalHeaderProvider, ImmutableList.of("gccl-gcs-cmd/tm"));
     }
 
+    ComputeEngineDetector.Engine engine = ComputeEngineDetector.getOrDetectEngine();
+    if (engine != null) {
+      internalHeaderProvider =
+          XGoogApiClientHeaderProvider.of(
+              internalHeaderProvider,
+              ImmutableList.of("gccl-gcs-cmd/" + engine.name().toLowerCase(java.util.Locale.US)));
+    }
+
     StorageSettings.Builder builder =
         new GapicStorageSettingsBuilder(StorageSettings.newBuilder().build())
             .setInternalHeaderProvider(internalHeaderProvider)
@@ -316,7 +324,12 @@ public final class GrpcStorageOptions extends StorageOptions
       defaultOpts = Opts.from(UnifiedOpts.userProject(quotaProjectId));
     }
 
-    builder.setHeaderProvider(this.getMergedHeaderProvider(new NoHeaderProvider()));
+    HeaderProvider mergedHeaderProvider = this.getMergedHeaderProvider(new NoHeaderProvider());
+    if (engine != null) {
+      mergedHeaderProvider =
+          new EngineHeaderProvider(mergedHeaderProvider, engine.getUserAgentSuffix());
+    }
+    builder.setHeaderProvider(mergedHeaderProvider);
 
     InstantiatingGrpcChannelProvider.Builder channelProviderBuilder =
         InstantiatingGrpcChannelProvider.newBuilder()
@@ -1408,6 +1421,39 @@ public final class GrpcStorageOptions extends StorageOptions
           || (t instanceof OutOfRangeException && ((OutOfRangeException) t).isRetryable())
           || (t instanceof AbortedException && ((AbortedException) t).isRetryable())
           || delegate.shouldRetry(StorageException.coalesce(t), null);
+    }
+  }
+
+  private static final class EngineHeaderProvider implements HeaderProvider, Serializable {
+    private static final long serialVersionUID = 1L;
+    private final HeaderProvider delegate;
+    private final String engineSuffix;
+
+    EngineHeaderProvider(HeaderProvider delegate, String engineSuffix) {
+      this.delegate = delegate;
+      this.engineSuffix = engineSuffix;
+    }
+
+    @Override
+    public Map<String, String> getHeaders() {
+      Map<String, String> baseHeaders = delegate.getHeaders();
+      Map<String, String> newHeaders = new java.util.HashMap<>(baseHeaders);
+      String userAgent = newHeaders.get("User-Agent");
+      if (userAgent == null) {
+        userAgent = newHeaders.get("user-agent");
+      }
+      if (userAgent != null && !userAgent.isEmpty()) {
+        if (!userAgent.contains(engineSuffix)) {
+          newHeaders.put("User-Agent", userAgent + engineSuffix);
+        }
+      } else {
+        String cleanSuffix =
+            engineSuffix.startsWith(", ") ? engineSuffix.substring(2) : engineSuffix;
+        newHeaders.put("User-Agent", cleanSuffix);
+      }
+      System.out.println("GrpcStorageOptions.EngineHeaderProvider: final headers = " + newHeaders);
+      System.out.flush();
+      return java.util.Collections.unmodifiableMap(newHeaders);
     }
   }
 }
