@@ -171,6 +171,20 @@ public abstract class StorageOptions extends ServiceOptions<Storage, StorageOpti
     return VERSION;
   }
 
+  @Override
+  public String getApplicationName() {
+    String appName = super.getApplicationName();
+    String engineSuffix = ComputeEngineDetector.detectEngineSuffix();
+    if (engineSuffix != null && !engineSuffix.isEmpty()) {
+      if (appName == null || appName.isEmpty()) {
+        return engineSuffix.startsWith(", ") ? engineSuffix.substring(2) : engineSuffix;
+      } else if (!appName.contains(engineSuffix)) {
+        return appName + engineSuffix;
+      }
+    }
+    return appName;
+  }
+
   /* This can break at any time, the value produce is intended to be informative not authoritative */
   @InternalApi
   public static String version() {
